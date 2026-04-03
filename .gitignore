@@ -3,19 +3,107 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Env
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+test_*.py
+
+# Environment Variables
 .env
+.env.local
+.env.*.local
+.env.production
+.env.staging
 app/.env
+frontend/.env
 
-# Node / Frontend
+# Runtime files
+sessions.db
+*.sqlite
+*.sqlite3
+*.db
+
+# Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/.cache/
+frontend/.next/
+frontend/out/
 
-# Editor / OS
+# IDE and Editor
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+
+# Performance and Benchmark
+benchmark_results_*.json
+perf_*.log
+*.prof
+
+# Logs
+*.log
+logs/
+log/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Package manager lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Mac
+.AppleDouble
+.LSOverride
+
+# Windows
+Desktop.ini

@@ -53,7 +53,7 @@ class TripMaster:
                 system_prompt=cfg["prompt"]
             )
             # 自动化按需索取工具
-            if agent.name is not "行程规划专家":
+            if agent.name != "行程规划专家":
                 batch = AmapMCPBatch(self.session, include_keywords=cfg["keywords"])
                 await agent.add_tool(batch)
             

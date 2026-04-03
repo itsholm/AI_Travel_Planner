@@ -33,7 +33,7 @@ WEATHER_AGENT_PROMPT = """你是一个精准的天气情报员。
 3. **预报处理**：如果用户提到“下周”或未来日期，请尽可能提供预报信息。如果工具只返回当前天气，请告知用户当前实况，并提醒出行前再次核实。
 """
 
-PLANNER_AGENT_PROMPT = PLANNER_AGENT_PROMPT = """你现在是全能行程规划专家。
+PLANNER_AGENT_PROMPT = """你现在是全能行程规划专家。
 你的任务是整合景点、天气和酒店信息，生成一个严格符合以下 JSON 格式的旅行计划。
 必须遵守的约束:
 - 数据一致性：`days` 数组中的日期必须与用户要求的日期范围严格匹配。
@@ -89,7 +89,7 @@ PLANNER_AGENT_PROMPT = PLANNER_AGENT_PROMPT = """你现在是全能行程规划�
     {
       "date": "YYYY-MM-DD",
       "day_weather": "晴",
-      "night_weather":多云,
+      "night_weather":"多云",
       "day_temp": 25,
       "night_temp": 15,
       "wind_direction": "东南风",

@@ -137,3 +137,28 @@ class TripPlan(BaseModel):
     weather_info: List[WeatherInfo] = Field(default_factory=list,description="多日天气概况")
     overall_suggestions: str = Field(...,description="总体建议")
     budget: Optional[Budget] = Field(default=None, description="总预算预估")
+
+
+# ============ 会话模型 ============
+
+class ConversationMessage(BaseModel):
+    """对话消息"""
+    role: str = Field(..., description="角色: user/assistant", example="user")
+    content: str = Field(..., description="消息内容", example="把第二天的景点换成天坛")
+    timestamp: Optional[str] = Field(default="", description="时间戳")
+
+
+class Session(BaseModel):
+    """会话信息"""
+    session_id: str = Field(..., description="会话唯一标识", example="abc123-def456")
+    user_request: Optional[TripRequest] = Field(default=None, description="用户的初始旅行请求")
+    current_plan: Optional[TripPlan] = Field(default=None, description="当前行程计划")
+    messages: List[ConversationMessage] = Field(default_factory=list, description="对话历史消息")
+    summary: str = Field(default="", description="历史对话摘要")
+    updated_at: Optional[str] = Field(default="", description="最后更新时间")
+
+
+class ModifyRequest(BaseModel):
+    """修改行程请求"""
+    session_id: str = Field(..., description="会话ID", example="abc123-def456")
+    instruction: str = Field(..., description="修改指令", example="把第二天的景点换成天坛")

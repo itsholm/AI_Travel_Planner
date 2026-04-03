@@ -129,12 +129,46 @@
       </div>
 
       <!-- 结果页 -->
-      <TravelResult 
-        v-if="finalPlan" 
-        :plan="finalPlan" 
+      <TravelResult
+        v-if="finalPlan"
+        :plan="finalPlan"
+        :session-id="sessionId"
         @back="handleBack"
         @day-change="activeDayIndex= $event"
+        @modify="openModifyDialog"
       />
+
+      <!-- 修改行程对话框 -->
+      <a-modal
+        v-model:open="showModifyDialog"
+        title="修改行程"
+        @ok="handleModify"
+        @cancel="showModifyDialog = false"
+        :confirm-loading="modifyLoading"
+      >
+        <p class="modify-hint">请告诉我您想如何调整行程，例如：</p>
+        <ul class="modify-examples">
+          <li>把第二天的景点换成天坛</li>
+          <li>增加第三天的午餐预算到100元</li>
+          <li>调整住宿为豪华酒店</li>
+        </ul>
+        <a-textarea
+          v-model:value="modifyText"
+          placeholder="请输入您的修改要求..."
+          :rows="4"
+          :max-length="200"
+          show-count
+        />
+
+        <!-- 显示对话历史 -->
+        <div v-if="conversationHistory.length > 0" class="conversation-history">
+          <h4>对话历史</h4>
+          <div v-for="(msg, index) in conversationHistory.slice(-3)" :key="index" class="history-item">
+            <span class="history-role">{{ msg.role === 'user' ? '👤 您' : '🤖 助手' }}:</span>
+            <span class="history-content">{{ msg.content }}</span>
+          </div>
+        </div>
+      </a-modal>
     </a-layout-content>
   </div>
 </template>
@@ -152,6 +186,8 @@ import TravelResult from './components/TravelResult.vue';
 const loading = ref(false);
 const finalPlan = ref<TravelPlan | null>(null);
 const activeDayIndex = ref(0);
+const sessionId = ref<string>("");  // 会话ID
+const conversationHistory = ref<any[]>([]);  // 对话历史
 
 // 表单数据
 const formData = reactive({
@@ -201,7 +237,8 @@ const onEndDateChange = () => {
 onMounted(() => {
   const savedPlan = sessionStorage.getItem('travel_plan');
   const savedActiveDay = sessionStorage.getItem('active_day_index');
-  
+  const savedSessionId = sessionStorage.getItem('session_id');
+
   if (savedPlan) {
     try {
       finalPlan.value = JSON.parse(savedPlan);
@@ -210,9 +247,14 @@ onMounted(() => {
       console.error('❌ 恢复数据失败:', e);
     }
   }
-  
+
   if (savedActiveDay) {
     activeDayIndex.value = parseInt(savedActiveDay);
+  }
+
+  if (savedSessionId) {
+    sessionId.value = savedSessionId;
+    console.log('💾 已恢复会话ID:', sessionId.value);
   }
 });
 
@@ -220,12 +262,16 @@ onMounted(() => {
 const savePlanToSession = (plan: TravelPlan) => {
   sessionStorage.setItem('travel_plan', JSON.stringify(plan));
   sessionStorage.setItem('active_day_index', activeDayIndex.value.toString());
+  if (sessionId.value) {
+    sessionStorage.setItem('session_id', sessionId.value);
+  }
 };
 
 // 清除保存的数据
 const clearSavedPlan = () => {
   sessionStorage.removeItem('travel_plan');
   sessionStorage.removeItem('active_day_index');
+  sessionStorage.removeItem('session_id');
 };
 // 提交处理
 const handleSubmit = async () => {
@@ -254,6 +300,8 @@ const handleSubmit = async () => {
 
     if (response.data) {
       finalPlan.value = response.data;
+      sessionId.value = response.data.session_id || "";  // 保存会话ID
+      console.log('💾 会话ID:', sessionId.value);
       message.success('规划生成成功！');
     }
   } catch (error: any) {
@@ -271,7 +319,82 @@ const handleSubmit = async () => {
 // 返回处理
 const handleBack = () => {
   finalPlan.value = null;
+  sessionId.value = "";
   clearSavedPlan(); // 清除保存的数据
+};
+
+// 修改行程功能
+const showModifyDialog = ref(false);
+const modifyText = ref("");
+const modifyLoading = ref(false);
+
+const openModifyDialog = () => {
+  if (!sessionId.value) {
+    message.error('会话已失效，请重新规划行程');
+    return;
+  }
+  showModifyDialog.value = true;
+
+  // 加载对话历史
+  loadConversationHistory();
+};
+
+const handleModify = async () => {
+  if (!sessionId.value) {
+    message.error('会话已失效，请重新规划行程');
+    return;
+  }
+
+  if (!modifyText.value.trim()) {
+    message.warning('请输入修改要求');
+    return;
+  }
+
+  modifyLoading.value = true;
+
+  try {
+    const response = await axios.post('/api/modify', {
+      session_id: sessionId.value,
+      instruction: modifyText.value.trim()
+    });
+
+    if (response.data) {
+      finalPlan.value = response.data;
+      message.success('行程已修改！');
+      savePlanToSession(finalPlan.value);
+
+      // 更新对话历史
+      if (response.data.current_plan) {
+        loadConversationHistory();
+      }
+    }
+
+    showModifyDialog.value = false;
+    modifyText.value = "";
+  } catch (error: any) {
+    console.error('Modify Error:', error);
+    if (error.response) {
+      message.error(error.response.data?.message || '修改失败');
+    } else {
+      message.error('网络连接失败，请检查后端服务');
+    }
+  } finally {
+    modifyLoading.value = false;
+  }
+};
+
+const loadConversationHistory = async () => {
+  if (!sessionId.value) return;
+
+  try {
+    const response = await axios.get(`/api/session/${sessionId.value}`);
+    if (response.data && response.data.messages) {
+      conversationHistory.value = response.data.messages;
+      console.log('💾 对话历史已加载:', conversationHistory.value);
+    }
+  } catch (error: any) {
+    console.error('加载对话历史失败:', error);
+  }
 };
 </script>
 

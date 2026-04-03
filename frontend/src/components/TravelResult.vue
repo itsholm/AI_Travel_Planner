@@ -5,14 +5,25 @@
     <!-- 顶部操作栏 -->
     <div class="header-actions mb-4">
       <a-space size="middle">
-        <a-button 
-          type="default" 
+        <!-- AI 智能修改按钮 -->
+        <a-button
+          type="primary"
+          @click="$emit('modify')"
+          :disabled="!sessionId">
+          <template #icon>
+            <RobotOutlined />
+          </template #icon>
+          🤖 智能修改
+        </a-button>
+
+        <a-button
+          type="default"
           @click="toggleEditMode">
           <template #icon>
             <SaveOutlined v-if="editMode" />
             <EditOutlined v-else />
-          </template>
-          {{ editMode ? '💾 保存修改' : '✏️ 编辑行程' }}
+          </template #icon>
+          {{ editMode ? '💾 保存修改' : '✏️ 手动编辑' }}
         </a-button>
 
         <a-dropdown v-if="!editMode">
@@ -25,11 +36,22 @@
                 📄 导出为PDF
               </a-menu-item>
             </a-menu>
-          </template>
+          </template #icon>
           <a-button type="default">
             📥 导出行程 <DownOutlined />
           </a-button>
         </a-dropdown>
+
+        <a-button
+          type="default"
+          danger
+          @click="$emit('back')"
+        >
+          <template #icon>
+            <CloseOutlined />
+          </template #icon>
+          返回规划
+        </a-button>
       </a-space>
     </div>
 
@@ -135,7 +157,7 @@
                 🌤 {{ day.weather }}
               </a-tag>
             </div>
-          </template>
+          </template #icon>
 
           <!-- 行程基本信息 -->
           <div class="day-info">
@@ -168,7 +190,7 @@
                       <a-button size="small" @click="moveAttraction(day.day_index, index, 'down')" :disabled="index === day.attractions.length - 1">↓</a-button>
                       <a-button size="small" danger @click="deleteAttraction(day.day_index, index)">✕</a-button>
                     </a-space>
-                  </template>
+                  </template #icon>
                   <!-- 景点图片 -->
                   <div class="attraction-image-wrapper">
                     <img
@@ -199,7 +221,7 @@
                   </div>
                 </a-card>
               </a-list-item>
-            </template>
+            </template #icon>
           </a-list>
 
           <!-- 酒店推荐 -->
@@ -207,7 +229,7 @@
           <a-card v-if="day.hotel" size="small" class="hotel-card">
             <template #title>
               <span class="hotel-title">{{ day.hotel.name }}</span>
-            </template>
+            </template #icon>
             <a-descriptions :column="2" size="small">
               <a-descriptions-item label="地址">{{ day.hotel.address }}</a-descriptions-item>
               <a-descriptions-item label="类型">{{ day.hotel.type }}</a-descriptions-item>
@@ -233,21 +255,71 @@
       </a-collapse>
     </a-card>
   </div>
-</template>
+  
+  <!-- AI 修改对话框 -->
+  <a-modal
+    v-model:open="showModifyDialog"
+    title="🤖 智能修改行程"
+    @ok="handleModify"
+    @cancel="showModifyDialog = false"
+    :confirm-loading="modifyLoading"
+    width="600px"
+  >
+    <div class="modify-dialog-content">
+      <p class="modify-hint">
+        请告诉我您想如何调整行程，系统会根据您的建议智能优化：
+      </p>
+
+      <ul class="modify-examples">
+        <li>• 把第二天的景点换成天坛</li>
+        <li>• 增加第三天的午餐预算到100元</li>
+        <li>• 调整住宿为豪华酒店</li>
+        <li>• 添加附近的博物馆</li>
+      </ul>
+
+      <a-textarea
+        v-model:value="modifyText"
+        placeholder="请输入您的修改要求，越具体越好..."
+        :rows="4"
+        :max-length="500"
+        show-count
+        class="modify-input"
+      />
+
+      <!-- 显示对话历史 -->
+      <div v-if="conversationHistory.length > 0" class="conversation-history">
+        <h4>💬 最近对话</h4>
+        <div class="history-list">
+          <div
+            v-for="(msg, index) in conversationHistory.slice(-3)"
+            :key="index"
+            class="history-item"
+            :class="msg.role"
+          >
+            <strong>{{ msg.role === 'user' ? '您' : '助手' }}:</strong>
+            <span>{{ msg.content }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </a-modal>
+</template #icon>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { message } from 'ant-design-vue';
-import { EditOutlined, SaveOutlined, DownOutlined } from '@ant-design/icons-vue';
+import { EditOutlined, SaveOutlined, DownOutlined, RobotOutlined, CloseOutlined } from '@ant-design/icons-vue';
 import type { TravelPlan } from '../types/travel';
 import AMapView from './AMapView.vue';
 
 const props = defineProps<{
   plan: TravelPlan
+  sessionId?: string
 }>();
 
 const emit = defineEmits<{
-  save: [plan: TravelPlan]
+  back: []
+  modify: []
 }>();
 
 const editMode = ref(false);
@@ -362,6 +434,25 @@ const handleImageError = (e: Event) => {
 // 导出占位
 const exportAsImage = () => message.info('导出为图片（开发中）');
 const exportAsPDF = () => message.info('导出为PDF（开发中）');
+
+// AI 修改相关功能
+type ChatMessage = { role: 'user' | 'assistant'; content: string };
+
+const showModifyDialog = ref(false);
+const modifyLoading = ref(false);
+const modifyText = ref('');
+const conversationHistory = ref<ChatMessage[]>([]);
+
+// 点击“智能修改”由父组件接管 AI 逻辑（本组件只负责弹窗壳和基本交互）
+const handleModify = async () => {
+  showModifyDialog.value = false;
+  emit('modify');
+};
+
+// 兼容旧命名（如果你后续在模板里切到 handleModifyClick）
+const handleModifyClick = () => {
+  showModifyDialog.value = true;
+};
 </script>
 
 <style scoped>
@@ -567,5 +658,73 @@ const exportAsPDF = () => message.info('导出为PDF（开发中）');
   .weather-card .weather-item {
     padding: 10px;
   }
+}
+
+/* AI 修改对话框样式 */
+.modify-dialog-content {
+  padding: 8px 0;
+}
+
+.modify-hint {
+  margin-bottom: 16px;
+  color: #666;
+  font-size: 14px;
+}
+
+.modify-examples {
+  margin-bottom: 20px;
+  padding-left: 20px;
+}
+
+.modify-examples li {
+  margin-bottom: 8px;
+  color: #666;
+  font-size: 13px;
+}
+
+.modify-input {
+  margin-bottom: 20px;
+}
+
+.conversation-history {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.conversation-history h4 {
+  margin-bottom: 12px;
+  color: #666;
+  font-size: 14px;
+}
+
+.history-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.history-item {
+  margin-bottom: 12px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.history-item.user {
+  background: #e3f2fd;
+  margin-left: 20px;
+}
+
+.history-item.assistant {
+  background: #f3e5f5;
+  margin-right: 20px;
+}
+
+.history-item strong {
+  display: inline-block;
+  margin-right: 8px;
+  font-weight: 600;
 }
 </style>
