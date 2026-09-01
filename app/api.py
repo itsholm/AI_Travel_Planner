@@ -3,12 +3,25 @@ import os
 import re
 import json
 import time
+import asyncio
+import sys
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from datetime import datetime
-from models.schemas import TripRequest, TripPlan, Budget, Session, ModifyRequest, ConversationMessage
+from models.schemas import (
+    BusinessTripRequest,
+    TaskState,
+    ToolRiskLevel,
+    TripRequest,
+    TripPlan,
+    Budget,
+    Session,
+    ModifyRequest,
+    ConversationMessage,
+)
 from metrics import metrics_collector
 from performance_middleware import PerformanceMiddleware
 
@@ -20,6 +33,12 @@ from parallel_planner import ParallelTripPlanner
 from dotenv import load_dotenv
 import uuid
 from services.session_store import get_session_store
+from services.task_store import get_task_store
+from mcp_gateway.executor import ToolGateway
+from mcp_gateway.registry import GatewayToolRegistry
+from mcp_gateway.risk_policy import PolicyEngine
+from runtime.task_runtime import BusinessTripRuntime
+from tools.business_travel import create_business_travel_tools
 #import traceback
 load_dotenv()
 
@@ -50,7 +69,10 @@ mcp_manager = {
     "unsplash_session": None, # 👈 新增 Unsplash 会话
     "master": None,
     "exit_stack": None,
-    "session_store": None  # 会话存储
+    "session_store": None,  # 会话存储
+    "task_store": None,
+    "tool_gateway": None,
+    "business_runtime": None
 }
 
 @app.on_event("startup")
@@ -62,7 +84,7 @@ async def startup_event():
 
     # --- 连接高德服务 ---
     amap_params = StdioServerParameters(
-        command="python",
+        command=sys.executable,
         args=["services/amap_mcp_service.py"],
         env={"AMAP_API_KEY": os.getenv("AMAP_API_KEY")}
     )
@@ -73,7 +95,7 @@ async def startup_event():
 
     # --- 💡 新增：连接 Unsplash 服务 ---
     unsplash_params = StdioServerParameters(
-        command="python",
+        command=sys.executable,
         args=["services/unsplash_mcp_service.py"], # 👈 确保文件名和路径正确
         env={"UNSPLASH_ACCESS_KEY": os.getenv("UNSPLASH_ACCESS_KEY")}
     )
@@ -95,7 +117,148 @@ async def startup_event():
     # 4. 初始化会话存储
     mcp_manager["session_store"] = get_session_store("sessions.db")
 
+    # 5. 初始化企业差旅 Runtime + Tool Gateway
+    task_store = get_task_store("tasks.db")
+    gateway_registry = GatewayToolRegistry()
+    for tool in create_business_travel_tools():
+        if tool.name == "book_hotel":
+            gateway_registry.register_tool(
+                tool,
+                server="mock-booking",
+                risk_level=ToolRiskLevel.HIGH,
+                required_scope="travel:write",
+                side_effect=True,
+                timeout_ms=5000,
+                max_retries=0,
+            )
+        elif tool.name in {"calendar_create", "send_itinerary"}:
+            gateway_registry.register_tool(
+                tool,
+                server="mock-office",
+                risk_level=ToolRiskLevel.MEDIUM,
+                required_scope="calendar:write",
+                side_effect=True,
+                timeout_ms=5000,
+                max_retries=1,
+            )
+        else:
+            gateway_registry.register_tool(
+                tool,
+                server="mock-travel",
+                risk_level=ToolRiskLevel.LOW,
+                required_scope="travel:read",
+                side_effect=False,
+                timeout_ms=5000,
+                max_retries=2,
+            )
+
+    tool_gateway = ToolGateway(gateway_registry, task_store)
+    business_runtime = BusinessTripRuntime(task_store, tool_gateway, PolicyEngine())
+    mcp_manager["task_store"] = task_store
+    mcp_manager["tool_gateway"] = tool_gateway
+    mcp_manager["business_runtime"] = business_runtime
+
     print("🚀 服务初始化完成：高德(地图数据) & Unsplash(视觉增强) & 会话存储 已就绪。")
+
+
+def _get_business_runtime() -> BusinessTripRuntime:
+    runtime = mcp_manager.get("business_runtime")
+    if not runtime:
+        raise HTTPException(status_code=500, detail="企业差旅 Runtime 尚未初始化完成")
+    return runtime
+
+
+def _get_task_store():
+    store = mcp_manager.get("task_store")
+    if not store:
+        raise HTTPException(status_code=500, detail="任务存储尚未初始化完成")
+    return store
+
+
+@app.post("/api/business-travel/tasks")
+async def create_business_trip_task(request: BusinessTripRequest):
+    """创建企业差旅 Task，并运行到完成或等待审批。"""
+    runtime = _get_business_runtime()
+    try:
+        return await runtime.create_task(request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/business-travel/tasks/{task_id}")
+async def get_business_trip_task(task_id: str):
+    """查询企业差旅 Task 当前状态。"""
+    store = _get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {
+        **task.model_dump(mode="json"),
+        "pending_approval": (
+            store.get_pending_approval(task_id).model_dump(mode="json")
+            if store.get_pending_approval(task_id)
+            else None
+        ),
+        "latest_checkpoint": (
+            store.get_latest_checkpoint(task_id).model_dump(mode="json")
+            if store.get_latest_checkpoint(task_id)
+            else None
+        ),
+    }
+
+
+@app.get("/api/business-travel/tasks/{task_id}/events")
+async def stream_business_trip_events(task_id: str, after_event_id: str = Query(default=None)):
+    """以 SSE 格式返回已持久化事件，前端可用 EventSource 消费。"""
+    store = _get_task_store()
+    if not store.get_task(task_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    async def event_generator():
+        events = store.list_events(task_id, after_event_id=after_event_id)
+        for event in events:
+            yield f"id: {event.event_id}\n"
+            yield f"event: {event.event_type}\n"
+            yield f"data: {event.model_dump_json()}\n\n"
+            await asyncio.sleep(0)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/api/business-travel/approvals/{approval_id}/approve")
+async def approve_business_trip_action(approval_id: str):
+    """批准一个高风险副作用操作，并继续执行 Task。"""
+    runtime = _get_business_runtime()
+    try:
+        return await runtime.approve(approval_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/business-travel/approvals/{approval_id}/reject")
+async def reject_business_trip_action(approval_id: str):
+    """拒绝一个高风险副作用操作。"""
+    runtime = _get_business_runtime()
+    try:
+        return await runtime.reject(approval_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/business-travel/tasks/{task_id}/resume")
+async def resume_business_trip_task(task_id: str):
+    """从最近 Checkpoint 恢复企业差旅 Task。"""
+    runtime = _get_business_runtime()
+    try:
+        return await runtime.resume(task_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/plan")  #高度解耦，它不需要知道MCP存在，也不知道工具有多少
 async def create_plan(request: TripRequest):
@@ -402,6 +565,10 @@ async def shutdown_event():
     session_store = mcp_manager.get("session_store")
     if session_store:
         session_store.close()
+
+    task_store = mcp_manager.get("task_store")
+    if task_store:
+        task_store.close()
 
     print("👋 系统已安全关闭，资源已释放。")
 

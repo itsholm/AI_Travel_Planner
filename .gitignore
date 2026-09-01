@@ -40,6 +40,7 @@ coverage.xml
 *.cover
 .hypothesis/
 test_*.py
+!tests/test_*.py
 
 # Environment Variables
 .env
