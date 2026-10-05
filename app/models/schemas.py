@@ -1,3 +1,5 @@
+from typing import Dict, Any
+from enum import Enum
 #---------自底向上的数据模型--------------
 from pydantic import BaseModel,Field, field_validator
 from typing import Optional,List
@@ -149,6 +151,7 @@ class ConversationMessage(BaseModel):
 
 
 class Session(BaseModel):
+    current_task_id: str = ""
     """会话信息"""
     session_id: str = Field(..., description="会话唯一标识", example="abc123-def456")
     user_request: Optional[TripRequest] = Field(default=None, description="用户的初始旅行请求")
@@ -162,3 +165,160 @@ class ModifyRequest(BaseModel):
     """修改行程请求"""
     session_id: str = Field(..., description="会话ID", example="abc123-def456")
     instruction: str = Field(..., description="修改指令", example="把第二天的景点换成天坛")
+
+
+class TaskState(str, Enum):
+    CREATED = "CREATED"
+    PLANNING = "PLANNING"
+    EXECUTING = "EXECUTING"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+    RETRYING = "RETRYING"
+    PAUSED = "PAUSED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class ToolRiskLevel(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class ToolCallStatus(str, Enum):
+    PROPOSED = "PROPOSED"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+
+class ApprovalDecision(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class BusinessTripRequest(BaseModel):
+    """企业差旅任务请求"""
+    origin_city: str = Field(..., description="出发城市", example="上海")
+    destination_city: str = Field(..., description="目的地城市", example="杭州")
+    start_date: str = Field(..., description="出发日期 YYYY-MM-DD", example="2026-09-09")
+    end_date: str = Field(..., description="返程日期 YYYY-MM-DD", example="2026-09-10")
+    meeting_time: str = Field(..., description="会议时间", example="周四下午2点")
+    meeting_location: str = Field(..., description="会议地点", example="滨江客户公司")
+    budget_limit: int = Field(..., ge=0, description="预算上限，单位元", example=4000)
+    employee_level: str = Field(default="standard", description="员工差旅等级")
+    avoid_red_eye: bool = Field(default=True, description="是否避免红眼航班")
+    hotel_within_km: Optional[float] = Field(default=3.0, gt=0, description="酒店距离会议地点上限")
+    hotel_refundable_required: bool = Field(default=True, description="是否要求可取消酒店")
+    travelers: List[str] = Field(default_factory=list, description="同行人")
+    notify_emails: List[str] = Field(default_factory=list, description="行程通知邮箱")
+    free_text_input: Optional[str] = Field(default="", description="额外约束")
+
+
+class ToolSpec(BaseModel):
+    """Runtime 可见的工具元数据"""
+    name: str
+    server: str = "local"
+    description: str = ""
+    input_schema: Dict[str, Any] = Field(default_factory=dict)
+    risk_level: ToolRiskLevel = ToolRiskLevel.LOW
+    required_scope: str = "travel:read"
+    side_effect: bool = False
+    timeout_ms: int = 10000
+    max_retries: int = 2
+    cache_ttl: Optional[int] = None
+
+
+class ToolCallRecord(BaseModel):
+    call_id: str
+    task_id: str
+    tool_name: str
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+    args_hash: str = ""
+    idempotency_key: str = ""
+    risk_level: ToolRiskLevel = ToolRiskLevel.LOW
+    side_effect: bool = False
+    status: ToolCallStatus = ToolCallStatus.PROPOSED
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    retry_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class Approval(BaseModel):
+    approval_id: str
+    task_id: str
+    call_id: str
+    tool_name: str
+    action: str
+    risk_level: ToolRiskLevel
+    preview: Dict[str, Any] = Field(default_factory=dict)
+    decision: ApprovalDecision = ApprovalDecision.PENDING
+    created_at: str = ""
+    decided_at: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class Checkpoint(BaseModel):
+    checkpoint_id: str
+    task_id: str
+    step: str
+    state: TaskState
+    state_json: Dict[str, Any] = Field(default_factory=dict)
+    version: int = 1
+    created_at: str = ""
+
+
+class TaskEvent(BaseModel):
+    event_id: str
+    task_id: str
+    event_type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+
+
+class BusinessTripTask(BaseModel):
+    task_id: str
+    user_id: str = "demo-user"
+    goal: str
+    request: BusinessTripRequest
+    state: TaskState = TaskState.CREATED
+    current_step: str = ""
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class CreateTaskResponse(BaseModel):
+    task_id: str
+    state: TaskState
+    current_step: str
+    events: List[TaskEvent] = Field(default_factory=list)
+    pending_approval: Optional[Approval] = None
+    result: Optional[Dict[str, Any]] = None
+
+
+class TravelPlanningTask(BusinessTripTask):
+    request: TripRequest
+    session_id: str = ""
+    parent_task_id: str = ""
+    planning_mode: str = "multi_agent"
+    memory_context: str = ""
+
+
+class BookingRequest(BaseModel):
+    day_index: int = Field(ge=0)
+    guest_names: List[str] = Field(min_length=1)
+
+    @field_validator("guest_names")
+    @classmethod
+    def validate_guests(cls, values):
+        if any(not name.strip() for name in values):
+            raise ValueError("入住人姓名不能为空")
+        return [name.strip() for name in values]

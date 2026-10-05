@@ -9,7 +9,7 @@ class ToolRegistry:
     async def add_tool(self, tool: Any): #tool是一个batch对象
         """添加工具：如果是 MCP 批处理对象，则自动展开"""
         if hasattr(tool, 'auto_expand') and tool.auto_expand:#如果有这个字段且为true
-            expanded_tools = await tool.get_expanded_tools() #batch的异步方法，从会话的MCP服务端拉取所有工具并注册为mcptools
+            expanded_tools = await tool.get_expanded_tools() #batch的异步方法，从会话的MCP服务端拉取所有工具并注册为mcptools实例对象
             for et in expanded_tools:
                 self.register_single_tool(et) #对于每一个mcptool，添加到注册表中。每一个mcptool
             print(f"已从 MCP 服务端自动加载 {len(expanded_tools)} 个工具")

@@ -107,3 +107,6 @@ pnpm-lock.yaml
 
 # Windows
 Desktop.ini
+# Runtime integration regression tests
+!tests/test_travel_runtime.py
+!tests/test_runtime_observability.py

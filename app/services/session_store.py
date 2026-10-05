@@ -29,6 +29,9 @@ class SessionStore:
                 updated_at TEXT
             )
         """)
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(sessions)")}
+        if "current_task_id" not in columns:
+            self.conn.execute("ALTER TABLE sessions ADD COLUMN current_task_id TEXT NOT NULL DEFAULT ''")
         self.conn.commit()
 
     def save_session(self, session: Session) -> bool:
@@ -60,15 +63,16 @@ class SessionStore:
 
             self.conn.execute("""
                 INSERT OR REPLACE INTO sessions
-                (session_id, user_request, current_plan, messages, summary, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (session_id, user_request, current_plan, messages, summary, updated_at, current_task_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 session.session_id,
                 user_request_json,
                 current_plan_json,
                 messages_json,
                 session.summary,
-                updated_at
+                updated_at,
+                session.current_task_id
             ))
             self.conn.commit()
             return True
@@ -112,6 +116,7 @@ class SessionStore:
 
             return Session(
                 session_id=row['session_id'],
+                current_task_id=row['current_task_id'] or "",
                 user_request=user_request,
                 current_plan=current_plan,
                 messages=messages,
@@ -159,6 +164,28 @@ class SessionStore:
             return True
         except Exception as e:
             print(f"删除会话失败: {e}")
+            return False
+
+    def clear_runtime_state(self, session_id: str) -> bool:
+        """清空会话短期对话历史和摘要，保留请求与规划结果。"""
+        try:
+            cursor = self.conn.execute(
+                """
+                UPDATE sessions
+                SET messages = ?, summary = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (
+                    json.dumps([], ensure_ascii=False),
+                    "",
+                    datetime.now().isoformat(),
+                    session_id,
+                ),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"清空会话运行时状态失败: {e}")
             return False
 
     def close(self):

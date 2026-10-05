@@ -86,6 +86,8 @@ export interface DayPlan {
  * 对应后端 TripPlan 类
  */
 export interface TravelPlan {
+  task_id?: string;
+  session_id?: string;
   city: string;
   start_date: string;
   end_date: string;

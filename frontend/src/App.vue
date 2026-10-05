@@ -8,13 +8,30 @@
         <div class="circle circle-2"></div>
       </div>
 
+      <div class="top-nav">
+        <a-button
+          :type="currentView === 'travel' ? 'primary' : 'default'"
+          @click="currentView = 'travel'"
+        >
+          行程规划
+        </a-button>
+        <a-button
+          :type="currentView === 'observability' ? 'primary' : 'default'"
+          @click="currentView = 'observability'"
+        >
+          可观测
+        </a-button>
+      </div>
+
+      <ObservabilityDashboard v-if="currentView === 'observability'" />
+
       <!-- 页面头部（表单） -->
-      <div v-if="!finalPlan" class="page-header">
+      <div v-if="currentView === 'travel' && !finalPlan" class="page-header">
         <h1 class="page-title">定制你的专属行程</h1>
         <p class="page-subtitle">基于多 Agent 协作系统，为您提供最专业的旅行建议</p>
       </div>
 
-      <a-card v-if="!finalPlan" class="form-card" :bordered="false">
+      <a-card v-if="currentView === 'travel' && !finalPlan" class="form-card" :bordered="false">
         <a-form :model="formData" layout="vertical" @finish="handleSubmit">
           <!-- 目的地与日期 -->
           <div class="form-section">
@@ -124,13 +141,17 @@
       </a-card>
 
       <!-- 加载中 -->
-      <div v-if="loading" class="loading-area">
+      <div v-if="currentView === 'travel' && loading" class="loading-area">
         <a-spin size="large" tip="AI 专家团正在为您搜索景点、查询天气并生成行程..." />
       </div>
 
+      <a-alert v-if="currentView === 'travel' && failedTaskId && !loading" type="warning"
+        message="本次执行失败，已保留之前的方案和完成的阶段。" style="margin: 16px 0">
+        <template #description><a-button @click="resumeFailedPlan">继续执行</a-button></template>
+      </a-alert>
       <!-- 结果页 -->
       <TravelResult
-        v-if="finalPlan"
+        v-if="currentView === 'travel' && finalPlan"
         :plan="finalPlan"
         :session-id="sessionId"
         @back="handleBack"
@@ -138,8 +159,11 @@
         @modify="openModifyDialog"
       />
 
+      <TravelTaskActions v-if="currentView === 'travel' && finalPlan && taskId"
+        :task-id="taskId" :key="taskId" />
       <!-- 修改行程对话框 -->
       <a-modal
+        v-if="currentView === 'travel'"
         v-model:open="showModifyDialog"
         title="修改行程"
         @ok="handleModify"
@@ -174,7 +198,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed,onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import axios from 'axios';
 import { message } from 'ant-design-vue';
 import dayjs, { Dayjs } from 'dayjs';
@@ -182,11 +206,16 @@ import type { TravelPlan } from './types/travel';
 
 // 导入组件
 import TravelResult from './components/TravelResult.vue';
+import ObservabilityDashboard from './components/ObservabilityDashboard.vue';
+import TravelTaskActions from './components/TravelTaskActions.vue';
 
+const currentView = ref<'travel' | 'observability'>('travel');
 const loading = ref(false);
 const finalPlan = ref<TravelPlan | null>(null);
 const activeDayIndex = ref(0);
 const sessionId = ref<string>("");  // 会话ID
+const taskId = ref('');
+const failedTaskId = ref('');
 const conversationHistory = ref<any[]>([]);  // 对话历史
 
 // 表单数据
@@ -233,46 +262,56 @@ const onEndDateChange = () => {
   }
 };
 
-// 页面加载时尝试恢复数据
+// 页面加载时从后端持久化会话恢复当前规划
 onMounted(() => {
-  const savedPlan = sessionStorage.getItem('travel_plan');
-  const savedActiveDay = sessionStorage.getItem('active_day_index');
-  const savedSessionId = sessionStorage.getItem('session_id');
+  restoreCurrentSession();
+});
 
-  if (savedPlan) {
-    try {
-      finalPlan.value = JSON.parse(savedPlan);
-      console.log('💾 已恢复保存的行程数据');
-    } catch (e) {
-      console.error('❌ 恢复数据失败:', e);
-    }
-  }
+const restoreCurrentSession = async () => {
+  const savedSessionId = localStorage.getItem('current_session_id');
+  const savedActiveDay = localStorage.getItem('active_day_index');
 
   if (savedActiveDay) {
     activeDayIndex.value = parseInt(savedActiveDay);
   }
 
-  if (savedSessionId) {
-    sessionId.value = savedSessionId;
-    console.log('💾 已恢复会话ID:', sessionId.value);
-  }
-});
+  if (!savedSessionId) return;
 
-// 保存数据到 sessionStorage
-const savePlanToSession = (plan: TravelPlan) => {
-  sessionStorage.setItem('travel_plan', JSON.stringify(plan));
-  sessionStorage.setItem('active_day_index', activeDayIndex.value.toString());
+  try {
+    const response = await axios.get(`/api/session/${savedSessionId}`);
+    if (response.data?.current_plan) {
+      finalPlan.value = response.data.current_plan;
+      sessionId.value = savedSessionId;
+      taskId.value = response.data.current_task_id || '';
+      console.log('💾 已从后端恢复会话:', sessionId.value);
+    } else {
+      clearSavedPlan();
+    }
+  } catch (error) {
+    console.error('❌ 恢复会话失败:', error);
+    clearSavedPlan();
+  }
+};
+
+// 保存当前会话标识到 localStorage
+const savePlanToSession = () => {
+  localStorage.setItem('active_day_index', activeDayIndex.value.toString());
   if (sessionId.value) {
-    sessionStorage.setItem('session_id', sessionId.value);
+    localStorage.setItem('current_session_id', sessionId.value);
   }
 };
 
 // 清除保存的数据
 const clearSavedPlan = () => {
-  sessionStorage.removeItem('travel_plan');
-  sessionStorage.removeItem('active_day_index');
-  sessionStorage.removeItem('session_id');
+  localStorage.removeItem('current_session_id');
+  localStorage.removeItem('active_day_index');
 };
+
+watch(activeDayIndex, () => {
+  if (finalPlan.value && sessionId.value) {
+    savePlanToSession();
+  }
+});
 // 提交处理
 const handleSubmit = async () => {
     // 清除旧数据
@@ -283,6 +322,8 @@ const handleSubmit = async () => {
 
   loading.value = true;
   finalPlan.value = null;
+  taskId.value = '';
+  failedTaskId.value = '';
 
   const requestData = {
     ...formData,
@@ -300,14 +341,17 @@ const handleSubmit = async () => {
 
     if (response.data) {
       finalPlan.value = response.data;
+      taskId.value = response.data.task_id || '';
       sessionId.value = response.data.session_id || "";  // 保存会话ID
+      savePlanToSession();
       console.log('💾 会话ID:', sessionId.value);
       message.success('规划生成成功！');
     }
   } catch (error: any) {
     console.error('API Error:', error);
     if (error.response) {
-      message.error(error.response.data?.message || '服务器错误');
+      failedTaskId.value = error.response.data?.detail?.task_id || '';
+      message.error(error.response.data?.detail?.error || error.response.data?.message || '服务器错误');
     } else {
       message.error('网络连接失败，请检查后端服务');
     }
@@ -316,11 +360,38 @@ const handleSubmit = async () => {
   }
 };
 
+const resumeFailedPlan = async () => {
+  loading.value = true;
+  try {
+    const { data } = await axios.post(`/api/travel/tasks/${failedTaskId.value}/resume`, {}, { timeout: 120000 });
+    if (data.state !== 'COMPLETED' || !data.result?.plan) throw new Error(data.error || '任务尚未完成');
+    finalPlan.value = data.result.plan;
+    sessionId.value = data.session_id;
+    taskId.value = data.task_id;
+    failedTaskId.value = '';
+    savePlanToSession();
+    message.success('已恢复完成');
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || error.message || '恢复失败');
+  } finally { loading.value = false; }
+};
+
 // 返回处理
-const handleBack = () => {
+const handleBack = async () => {
+  const currentSessionId = sessionId.value;
   finalPlan.value = null;
   sessionId.value = "";
+  taskId.value = "";
+  failedTaskId.value = "";
   clearSavedPlan(); // 清除保存的数据
+
+  if (currentSessionId) {
+    try {
+      await axios.post(`/api/session/${currentSessionId}/reset-runtime`);
+    } catch (error) {
+      console.error('清空后端运行时状态失败:', error);
+    }
+  }
 };
 
 // 修改行程功能
@@ -360,13 +431,13 @@ const handleModify = async () => {
 
     if (response.data) {
       finalPlan.value = response.data;
+      taskId.value = response.data.task_id || '';
+      failedTaskId.value = '';
       message.success('行程已修改！');
-      savePlanToSession(finalPlan.value);
+      savePlanToSession();
 
       // 更新对话历史
-      if (response.data.current_plan) {
-        loadConversationHistory();
-      }
+      loadConversationHistory();
     }
 
     showModifyDialog.value = false;
@@ -374,7 +445,8 @@ const handleModify = async () => {
   } catch (error: any) {
     console.error('Modify Error:', error);
     if (error.response) {
-      message.error(error.response.data?.message || '修改失败');
+      failedTaskId.value = error.response.data?.detail?.task_id || '';
+      message.error(error.response.data?.detail?.error || error.response.data?.message || '修改失败');
     } else {
       message.error('网络连接失败，请检查后端服务');
     }
@@ -410,6 +482,14 @@ const loadConversationHistory = async () => {
   padding: 40px 50px;
   position: relative;
   z-index: 1;
+}
+
+.top-nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 1280px;
+  margin: 0 auto 20px;
 }
 
 /* 装饰背景 */

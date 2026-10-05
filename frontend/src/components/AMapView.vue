@@ -1,10 +1,11 @@
 <!-- components/AMapView.vue -->
 <template>
-  <div id="amap-container" ref="mapContainer" style="width: 100%; height: 300px;"></div>
+  <div v-if="mapError" role="alert" style="padding: 16px; color: #b42318;">{{ mapError }}</div>
+  <div v-show="!mapError" id="amap-container" ref="mapContainer" style="width: 100%; height: 300px;"></div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from 'vue';
+import { onMounted, onUnmounted, watch, ref } from 'vue';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { message } from 'ant-design-vue'; // ✅ 修复 message
 import type { DayPlan } from '../types/travel';
@@ -14,6 +15,7 @@ const props = defineProps<{
   activeDayIndex: number;   // ✅ 当前高亮第几天
 }>();
 
+const mapError = ref('');
 let mapInstance: any = null;
 let AMapClass: any = null; //持久化便量存储AMap 类库
 const polylines:any[] = [];//全局存储所有路线
@@ -24,9 +26,21 @@ const initMap = async () => {
   //const mapContainer = document.getElementById('amap-container');
   //if (!mapContainer) return;
 
+  const key = import.meta.env.VITE_AMAP_KEY;
+  if (!key) {
+    mapError.value = '地图服务尚未配置，请联系维护人员。';
+    return;
+  }
+
   try {
+    const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_CODE;
+    if (securityJsCode) {
+      (window as Window & {
+        _AMapSecurityConfig?: { securityJsCode: string };
+      })._AMapSecurityConfig = { securityJsCode };
+    }
     const AMap = await AMapLoader.load({
-      key: import.meta.env.VITE_AMAP_KEY,
+      key,
       version: '2.0',
       plugins: ['AMap.Marker', 'AMap.Polyline']
     });
@@ -46,6 +60,7 @@ const initMap = async () => {
     }
 
   } catch (err) {
+    mapError.value = '地图加载失败，请检查网络或地图服务配置后刷新页面。';
     console.error('地图加载失败:', err);
     message.error('地图加载失败'); // ✅ 现在可以用了
   }

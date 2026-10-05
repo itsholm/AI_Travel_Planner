@@ -21,7 +21,6 @@ asyncio
 httpx>=0.27.0
 
 # 数据库
-sqlite3
 
 # 日志与调试
 loguru>=0.7.0
